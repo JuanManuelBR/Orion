@@ -81,12 +81,10 @@ export class SocketHandler {
             // Notificar al estudiante (si sigue conectado brevemente) y al profesor
             const graceSeconds = DISCONNECT_GRACE_MS / 1000;
             this.io.to(`attempt_${attemptId}`).emit("connection_lost", {
-              message:
-                "Tu conexión se ha perdido. Tienes 60 segundos para reconectarte.",
+              message: "Tu conexión se ha perdido.",
               graceSeconds,
             });
 
-            // Notificar al profesor que el estudiante perdió conexión
             try {
               const attemptRepo = AppDataSource.getRepository(ExamAttempt);
               const attempt = await attemptRepo.findOne({
@@ -204,24 +202,31 @@ export class SocketHandler {
 
     // Cancelar timer de gracia si el estudiante se está reconectando
     const graceTimer = this.disconnectGraceTimers.get(attemptId);
+    const isReconnection = graceTimer !== undefined;
     if (graceTimer) {
       clearTimeout(graceTimer);
       this.disconnectGraceTimers.delete(attemptId);
       console.log(
         `✅ Reconexión detectada para attempt_${attemptId}, timer de gracia cancelado`,
       );
+
+      socket.join(`attempt_${attemptId}`);
       // Notificar al estudiante que su conexión fue restaurada
       socket.emit("connection_restored", {
         message: "¡Conexión restaurada! Puedes continuar.",
       });
       // Notificar al profesor
       if (attemptCheck) {
-        this.io
-          .to(`exam_${attemptCheck.examen_id}`)
-          .emit("student_reconnected", {
-            attemptId,
-            estudiante: { nombre: attemptCheck.nombre_estudiante },
-          });
+        const room = this.io.sockets.adapter.rooms.get(`attempt_${attemptId}`);
+        const isDoubleSocket = room ? room.size > 1 : false;
+        if (isReconnection || isDoubleSocket) {
+          this.io
+            .to(`exam_${attemptCheck.examen_id}`)
+            .emit("student_reconnected", {
+              attemptId,
+              estudiante: { nombre: attemptCheck.nombre_estudiante },
+            });
+        }
       }
     }
 

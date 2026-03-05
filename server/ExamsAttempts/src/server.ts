@@ -8,7 +8,9 @@ const port = process.env.PORT || 3002;
 
 const server = http.createServer(app);
 
-const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173,http://localhost:3001")
+const allowedOrigins = (
+  process.env.CORS_ORIGIN || "http://localhost:5173,http://localhost:3001"
+)
   .split(",")
   .map((o) => o.trim());
 
@@ -18,7 +20,9 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
-  transports: ['websocket', 'polling'],
+  transports: ["websocket", "polling"],
+  pingInterval: 3000, // ← Detecta caída en ~5s
+  pingTimeout: 10000, // ← Espera 10s respuesta
 });
 
 app.set("io", io);
@@ -31,7 +35,9 @@ AppDataSource.initialize()
     app.set("socketHandler", socketHandler);
 
     server.listen(port, () => {
-      console.log(`Microservicio ExamsAttempts corriendo en http://localhost:${port}`);
+      console.log(
+        `Microservicio ExamsAttempts corriendo en http://localhost:${port}`,
+      );
     });
   })
   .catch((err: unknown) => {

@@ -38,6 +38,7 @@ const Lienzo = lazy(() => import("../components/DrawingBoard"));
 const EditorJavaScript = lazy(() => import("../components/EditorJavaScript"));
 const EditorPython = lazy(() => import("../components/EditorPython"));
 const EditorJava = lazy(() => import("../components/EditorJava"));
+const GRACE_SECONDS = 60;
 import logoUniversidad from "../../assets/logo-universidad.webp";
 import logoUniversidadNoche from "../../assets/logo-universidad-noche.webp";
 
@@ -1491,10 +1492,7 @@ export default function SecureExamPlatform() {
 
       const newSocket = io(ATTEMPTS_API_URL, {
         transports: ["websocket", "polling"],
-        reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
+        reconnection: false,
       });
 
       newSocket.on("connect", () => {
@@ -1587,13 +1585,11 @@ export default function SecureExamPlatform() {
         setIsSocketConnected(false);
       });
 
-      newSocket.on(
-        "connection_lost",
-        (data: { message: string; graceSeconds: number }) => {
-          setConnectionLost(true);
-          setConnectionGraceSeconds(data.graceSeconds);
-        },
-      );
+      newSocket.on("disconnect", () => {
+        setIsSocketConnected(false);
+        setConnectionLost(true); // ← Modal aparece inmediatamente
+        setConnectionGraceSeconds(GRACE_SECONDS); // ← Countdown arranca
+      });
 
       newSocket.on("connection_restored", () => {
         setConnectionLost(false);
