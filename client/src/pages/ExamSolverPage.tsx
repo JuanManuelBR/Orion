@@ -309,6 +309,7 @@ export default function SecureExamPlatform() {
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
   const [isCharging, setIsCharging] = useState(false);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const socketRef = useRef<Socket | null>(null); // Ref para acceder al socket desde event listeners
 
   // --- ESTADOS DE CONEXIÓN WEBSOCKET ---
   const [isSocketConnected, setIsSocketConnected] = useState(false);
@@ -955,6 +956,21 @@ export default function SecureExamPlatform() {
     ]);
   };
 
+  const enqueueAnswer = (
+    preguntaId: number,
+    respuesta: any,
+    tipo_respuesta?: string,
+    metadata_codigo?: string,
+  ) => {
+    const queue = pendingAnswersQueueRef.current;
+    const idx = queue.findIndex(
+      (a) => a.preguntaId === preguntaId && a.tipo_respuesta === tipo_respuesta,
+    );
+    const entry = { preguntaId, respuesta, tipo_respuesta, metadata_codigo };
+    if (idx >= 0) queue[idx] = entry; // reemplazar con la versión más reciente
+    else queue.push(entry);
+  };
+
   const saveAnswer = async (
     preguntaId: number,
     respuesta: any,
@@ -962,13 +978,13 @@ export default function SecureExamPlatform() {
     metadata_codigo?: string,
   ) => {
     if (!studentData?.attemptId) return;
-    // Bloquear guardado cuando no hay conexión — el overlay impide que el estudiante responda
+
+    // Sin conexión: encolar para reintento al reconectar
     if (!isSocketConnectedRef.current) {
-      console.warn(
-        `⚠️ saveAnswer bloqueado — sin conexión. Pregunta ${preguntaId} no guardada.`,
-      );
+      enqueueAnswer(preguntaId, respuesta, tipo_respuesta, metadata_codigo);
       return;
     }
+
     const respuestaStr = JSON.stringify(respuesta);
     const cacheKey = tipo_respuesta
       ? `${preguntaId}_${tipo_respuesta}`
@@ -994,7 +1010,10 @@ export default function SecureExamPlatform() {
       if (!response.ok) throw new Error("Error al guardar respuesta");
       setLastSavedAnswers((prev) => ({ ...prev, [cacheKey]: respuestaStr }));
     } catch (error) {
-      console.error("❌ Error guardando respuesta:", error);
+      // Encolar para reintento — cubre el caso de que el ref aún no se actualizó
+      // (ventana entre caída de red y detección del socket)
+      enqueueAnswer(preguntaId, respuesta, tipo_respuesta, metadata_codigo);
+      console.warn(`⚠️ Respuesta encolada para reintento (pregunta ${preguntaId})`);
     } finally {
       setSavingStates((prev) => ({ ...prev, [preguntaId]: false }));
     }
@@ -1581,12 +1600,23 @@ export default function SecureExamPlatform() {
 
       // --- EVENTOS DE CONEXIÓN / DESCONEXIÓN ---
       newSocket.on("connect", () => {
+        // Actualizar ref sincrónicamente para que flushPendingAnswers vea la conexión activa
+        isSocketConnectedRef.current = true;
         setIsSocketConnected(true);
         setConnectionLost(false);
         setConnectionGraceSeconds(null);
+
+        // Reenviar respuestas que fallaron o se encolaron durante la desconexión
+        const pending = [...pendingAnswersQueueRef.current];
+        pendingAnswersQueueRef.current = [];
+        for (const a of pending) {
+          saveAnswer(a.preguntaId, a.respuesta, a.tipo_respuesta, a.metadata_codigo);
+        }
       });
 
       newSocket.on("disconnect", () => {
+        // Actualizar ref sincrónicamente para bloquear saveAnswer de inmediato
+        isSocketConnectedRef.current = false;
         setIsSocketConnected(false);
         setConnectionLost(true);
         setConnectionGraceSeconds(GRACE_SECONDS);
@@ -1641,6 +1671,7 @@ export default function SecureExamPlatform() {
         newSocket.disconnect();
       });
 
+      socketRef.current = newSocket;
       setSocket(newSocket);
       setExamStarted(true);
 
@@ -1746,12 +1777,41 @@ export default function SecureExamPlatform() {
       }
     };
 
+    // Detección inmediata de pérdida de red (antes de que socket.io detecte el disconnect)
+    const handleOffline = () => {
+      if (!examStarted || examFinishedRef.current) return;
+      // Actualizar estado sincrónicamente — más rápido que esperar el evento disconnect de socket.io
+      isSocketConnectedRef.current = false;
+      connectionLostRef.current = true;
+      setIsSocketConnected(false);
+      setConnectionLost(true);
+      setConnectionGraceSeconds(GRACE_SECONDS);
+      // Intentar notificar al profesor (puede funcionar si la caída es brevísima)
+      if (studentData?.attemptId) {
+        fetch(
+          `${ATTEMPTS_API_URL}/api/exam/attempt/${studentData.attemptId}/connection-lost`,
+          { method: "POST", keepalive: true },
+        ).catch(() => {});
+      }
+    };
+
+    // Cuando vuelve la red, reconectar el socket inmediatamente sin esperar el backoff
+    const handleOnline = () => {
+      if (!examStarted || examFinishedRef.current) return;
+      const sock = socketRef.current;
+      if (sock && !sock.connected) {
+        sock.connect();
+      }
+    };
+
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
 
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
@@ -1760,6 +1820,8 @@ export default function SecureExamPlatform() {
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
       clearTimeout(fullscreenTimeout);
     };
   }, [examStarted, examBlocked, isSubmitting, examFinished, studentData]);
