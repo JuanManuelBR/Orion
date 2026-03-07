@@ -11,6 +11,7 @@ export class EmailService {
       host: SMTP_HOST || "smtp.gmail.com",
       port: SMTP_PORT || 587,
       secure: (SMTP_PORT || 587) === 465,
+      family: 4,
       auth: {
         user: SMTP_USER,
         pass: SMTP_PASS,
