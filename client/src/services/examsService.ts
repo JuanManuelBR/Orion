@@ -92,7 +92,9 @@ function mapearPreguntasConImagenes(preguntas: Pregunta[]) {
   const imagenesMap: Map<string, File> = new Map();
 
   preguntas.forEach((pregunta, index) => {
-    const base = {
+    const idNum = pregunta.id ? parseInt(pregunta.id, 10) : undefined;
+    const base: any = {
+      ...(idNum && !isNaN(idNum) ? { id: idNum } : {}),
       enunciado:
         pregunta.titulo.trim() ||
         `Pregunta ${index + 1}`,
